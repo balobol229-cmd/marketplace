@@ -1,0 +1,7 @@
+Services:
+  image: postgres: 18_alpine
+  ports:
+    - "15432:15432"
+
+  environment:
+    Posther_Password: "${Postgres_Password}

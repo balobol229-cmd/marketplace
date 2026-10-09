@@ -26,3 +26,8 @@ class ProductforsaleDB(Base):
     user_id = Column(Integer)
 
 
+class OrderDB(Base):
+    __tablename__ = "orders"
+    id = Column(Integer, primary_key = True)
+    product_id = Column(Integer)
+    user_id = Column(Integer)

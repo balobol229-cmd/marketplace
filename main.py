@@ -4,11 +4,13 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from database import get_db, engine
-from models import UserDB, Base, NoteDB, ProductforsaleDB
+from models import UserDB, Base, NoteDB, ProductforsaleDB,OrderDB
 
 
 import bcrypt
 import jwt
+
+import os
 
 
 from datetime import datetime, timedelta, timezone
@@ -16,8 +18,9 @@ from datetime import datetime, timedelta, timezone
 
 
 
-SECRET_KEY = "aueshnik123_229"
-
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("нет SECRET_KEY")
 
 Base.metadata.create_all(bind=engine)
 
@@ -66,6 +69,11 @@ class ProductPublic(BaseModel):
 
 
 
+class Orderpublic(BaseModel):
+    id: int
+
+
+
 
 def get_current_user(token, db:Session = Depends(get_db)):
 
@@ -83,7 +91,7 @@ def get_current_user(token, db:Session = Depends(get_db)):
 
 
 
-@app.post("/register")
+@app.post("/auth/register")
 def create_account(user_data: UserRegister, db: Session = Depends(get_db)):
     if db.query(UserDB).filter(UserDB.email == user_data.email).first():
         raise HTTPException(status_code=400, detail = "Пользователь уже загестрирован")
@@ -95,19 +103,7 @@ def create_account(user_data: UserRegister, db: Session = Depends(get_db)):
     return {"message": "Вы успешно зарегестрировались"}
 
 
-@app.get("/registered")
-def show_registered_account(db: Session = Depends(get_db), current_user = Depends(get_current_user)):
-    users_public_list = []
-    
-    
-    users = db.query(UserDB).all()
-    for user in users:
-        users_public = UserPublic(email=user.email, id=user.id)
-        users_public_list.append(users_public)
-    
-    return users_public_list
-
-@app.get("/me")
+@app.get("/auth/me")
 def show_my_account(current_user: UserDB = Depends(get_current_user)):
     return UserPublic(id = current_user.id, email = current_user.email)
     
@@ -115,7 +111,7 @@ def show_my_account(current_user: UserDB = Depends(get_current_user)):
 
 
 
-@app.post("/login")
+@app.post("/auth/login")
 def confirm_registered(user_data: UserRegister, db: Session = Depends(get_db)):
     user = db.query(UserDB).filter(UserDB.email == user_data.email).first()
     if user and bcrypt.checkpw(user_data.password.encode('utf-8'), user.password.encode('utf-8')):
@@ -164,6 +160,8 @@ def Delete_Note(note_id: int, current_user = Depends(get_current_user), db: Sess
     db.delete(note)
     db.commit()
     return {"ok": "True"}
+
+
 
 
 @app.patch("/notes/{note_id}")
@@ -290,4 +288,86 @@ def getproudct(product_id: int, current_user = Depends(get_current_user), db: Se
 
 
 
+
+@app.post("/order")
+def open_order(product_id: int, current_user = Depends(get_current_user), db: Session = Depends(get_db)):
+    product = db.query(ProductforsaleDB).filter(ProductforsaleDB.id == product_id).first()
+    
+    if not product:
+        raise HTTPException(status_code = 404, detail = "нет такой штуки здесь")
+    if product.user_id == current_user.id:
+        raise HTTPException(status_code = 400, detail = "нельзя купить товар, который вы уже купили")
+    
+
+
+    already = db.query(OrderDB).filter(OrderDB.product_id == product.id, OrderDB.user_id == current_user.id).first()
+    if already:
+        raise HTTPException(status_code = 400, detail = "нельяз купить один товар два раза")
+  
+    
+    new_purchase = OrderDB(product_id=product_id, user_id = current_user.id)
+
+    db.add(new_purchase)
+    db.commit()
+    db.refresh(new_purchase)
+    return {"id": new_purchase.id, "user_id": new_purchase.user_id, "product_id":new_purchase.product_id }
+
+
+@app.get("/orders")
+def show_my_purchases_orders(current_user = Depends(get_current_user), db: Session = Depends(get_db)):
+    purchases_list = []
+
+    purchases = db.query(OrderDB).filter(OrderDB.user_id == current_user.id).all()
+
+    for my_purchases in purchases:
+        purchases_public = Orderpublic(id = my_purchases.id, user_id = my_purchases.user_id, product_id = my_purchases.product_id)
+
+        purchases_list.append(purchases_public)
+    return purchases_list
+
+
+@app.get("/order/{order_id}")
+def show_exactly_purchases(order_id: int, current_user = Depends(get_current_user), db: Session = Depends(get_db)):
+    orders = db.query(OrderDB).filter(OrderDB.id == order_id).first()
+
+    if not orders:
+        raise HTTPException(status_code = 404, detail = "такой строки нет")
+
+    if orders.user_id != current_user.id:
+        raise HTTPException(status_code = 403, detail = "Такого ордера нет в списке")
+
+    return {"id": orders.id, "product_id": orders.product_id, "user_id": orders.user_id}
+
+
+
+@app.delete("/order/{order_id}")
+def delete_order(order_id: int, current_user = Depends(get_current_user), db: Session = Depends(get_db)):
+
+    order_for_delete = db.query(OrderDB).filter(OrderDB.id == order_id).first()
+
+    if not order_for_delete:
+        raise HTTPException(status_code = 404, detail = "Такого ордера нет")
+    if order_for_delete.user_id != current_user.id:
+        raise HTTPException(status_code = 403, detail = "Такой оффер не принадлежит тебе")
+    db.delete(order_for_delete)
+    db.commit()
+
+    return {"ok": True}
+
+
+
+
+@app.get("/shop")
+def show_shop(current_user = Depends(get_current_user), db: Session = Depends(get_db)):
+    shop_list = []
+
+    open_shop_other_users = db.query(ProductforsaleDB).filter(ProductforsaleDB.user_id != current_user.id).all()
+
+    for shop in open_shop_other_users:
+        shopforsalespublic = ProductPublic(id = shop.id, title = shop.title, price = shop.price) 
+
+    
+    
+        shop_list.append(shopforsalespublic)
+    return shop_list
 

@@ -5,3 +5,5 @@ users.db
 .DS_Store
 .env
 .vscode/
+*_drill.py
+drill.py
